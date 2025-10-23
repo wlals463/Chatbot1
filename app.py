@@ -1,5 +1,5 @@
 # app.py
-# Streamlit 근로장려금 계산기 – 2024년 귀속분 (시각화 + 재산 + 기한후신고 감액)
+# Streamlit 근로장려금 계산기 – 2024년 버전 (시각화 + 천단위 표시)
 # 실행: streamlit run app.py
 
 import pandas as pd
@@ -10,24 +10,14 @@ from matplotlib.ticker import FuncFormatter
 st.set_page_config(page_title="2024년 근로장려금 계산기", page_icon="💰", layout="centered")
 
 st.title("💰 2024년 근로장려금 계산기")
-st.caption("비공식 참고용 계산기 • 실제 지급액은 국세청 심사 결과에 따라 달라질 수 있습니다.")
+st.caption("비공식 참고용 계산기 • 국세청 홈택스 공식 계산 결과와 다를 수 있습니다.")
 
-with st.expander("ℹ️ 계산 기준 및 신청 안내", expanded=True):
+with st.expander("ℹ️ 계산 기준 안내", expanded=False):
     st.markdown("""
-    **📅 2024년 귀속 근로장려금 신청 기간**
-    - **정기신청:** 2025년 5월 1일(목) ~ 5월 31일(토)
-    - **기한후신고:** 2025년 6월 1일 ~ 12월 2일  
-      → **지급액의 10% 감액** 적용됨
-
-    **💻 홈택스 신청 바로가기:**  
-    👉 [국세청 근로장려금 신청 (홈택스)](https://www.hometax.go.kr/websquare/websquare.html?w2xPath=/ui/pp/index.xml)
-
-    **📘 계산 참고:**  
-    - 단독: 총소득 2,200만 원 미만 / 최대 165만 원  
-    - 홑벌이: 총소득 3,200만 원 미만 / 최대 285만 원  
-    - 맞벌이: 총소득 4,400만 원 미만 / 최대 330만 원  
-    - 재산 1.4억~2.4억: 지급액의 50% 감액  
-    - 재산 2.4억 초과: 지급 제외  
+    - 2024년 귀속 근로장려금 기준으로 작성된 간이 계산기입니다.  
+    - 가구유형별 최대 지급액과 총소득 상한은 **국세청 공개자료**를 기반으로 합니다.  
+    - 재산이 **1억 4천만 원 초과 ~ 2억 4천만 원 이하**이면 **50% 감액**,  
+      **2억 4천만 원 초과** 시 **지급 제외(재산기준 초과)** 됩니다.
     """)
 
 # ------------------------------
@@ -49,7 +39,6 @@ with col2:
     income = st.number_input("연간 총소득(원)", value=10_000_000, step=100_000, min_value=0)
 
 property_value = st.number_input("재산가액(원)", value=50_000_000, step=1_000_000, min_value=0)
-late_check = st.checkbox("🕓 기한후신고(10% 감액 적용)")
 
 st.divider()
 
@@ -85,31 +74,19 @@ def apply_property_adjustment(amount: int, prop: int) -> tuple[int, str]:
     else:
         return 0, "재산기준 초과(미지급)"
 
-def apply_late_penalty(amount: int, is_late: bool) -> tuple[int, str]:
-    """기한후신고 시 10% 감액"""
-    if not is_late:
-        return amount, ""
-    return int(amount * 0.9), "기한후신고 감액(10%)"
-
 # ------------------------------
 # 4️⃣ 결과 계산
 # ------------------------------
 params = PARAMS[hh_type]
 base_amount = calc_eitc(income, params)
-adj_amount, note = apply_property_adjustment(base_amount, property_value)
-final_amount, late_note = apply_late_penalty(adj_amount, late_check)
+final_amount, note = apply_property_adjustment(base_amount, property_value)
 
 # ------------------------------
 # 5️⃣ 결과 출력
 # ------------------------------
 st.subheader("📊 계산 결과")
 st.metric(label="예상 근로장려금 지급액", value=f"{final_amount:,.0f} 원")
-
-status_notes = [n for n in [note, late_note] if n]
-if status_notes:
-    st.write("💬 지급유형: " + ", ".join(status_notes))
-else:
-    st.write("💬 지급유형: 정상 지급")
+st.write(f"💬 지급유형: **{note}**")
 
 with st.expander("📋 계산 상세"):
     st.write({
@@ -117,9 +94,8 @@ with st.expander("📋 계산 상세"):
         "총소득": f"{income:,} 원",
         "재산가액": f"{property_value:,} 원",
         "기본 산정액": f"{base_amount:,} 원",
-        "재산 반영 후": f"{adj_amount:,} 원",
-        "기한후신고 적용 후": f"{final_amount:,} 원",
-        "판정": ", ".join(status_notes) if status_notes else "정상 지급",
+        "최종 지급액": f"{final_amount:,} 원",
+        "재산 판정": note,
     })
 
 # ------------------------------
@@ -131,13 +107,12 @@ st.subheader("📈 총소득 대비 지급액 시각화")
 incomes = list(range(0, params["upper_income"] + 1, 500_000))
 amounts = [calc_eitc(i, params) for i in incomes]
 adjusted_amounts = [apply_property_adjustment(a, property_value)[0] for a in amounts]
-final_adjusted = [apply_late_penalty(apply_property_adjustment(a, property_value)[0], late_check)[0] for a in amounts]
 
 fig, ax = plt.subplots(figsize=(8, 4))
-ax.plot(incomes, amounts, label="기본 산정액", linestyle="--", alpha=0.5)
-ax.plot(incomes, adjusted_amounts, label="재산 반영 후", linestyle="-.", alpha=0.7)
-ax.plot(incomes, final_adjusted, label="최종 지급액(재산+기한후신고 반영)", linewidth=2)
+ax.plot(incomes, amounts, label="기본 산정액", linestyle="--", alpha=0.6)
+ax.plot(incomes, adjusted_amounts, label="재산 반영 후 지급액", linewidth=2)
 
+# 천단위 콤마 표시 포맷터
 formatter = FuncFormatter(lambda x, _: f"{int(x):,}")
 ax.xaxis.set_major_formatter(formatter)
 ax.yaxis.set_major_formatter(formatter)
@@ -160,6 +135,5 @@ st.markdown("""
 - 홑벌이: 총소득 3,200만 원 미만 / 최대 285만 원  
 - 맞벌이: 총소득 4,400만 원 미만 / 최대 330만 원  
 - 재산 1.4억~2.4억: 지급액의 50% 감액  
-- 재산 2.4억 초과: 지급 제외  
-- 기한후신고(6월~12월): 지급액의 10% 감액
+- 재산 2.4억 초과: 지급 제외
 """)
