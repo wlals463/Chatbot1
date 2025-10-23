@@ -1,11 +1,10 @@
 # app.py
-# Streamlit 근로장려금 계산기 – 2024년 버전 (시각화 + 천단위 표시)
+# Streamlit 근로장려금 계산기 – 2024년 버전 (시각화 포함)
 # 실행: streamlit run app.py
 
 import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
-from matplotlib.ticker import FuncFormatter
 
 st.set_page_config(page_title="2024년 근로장려금 계산기", page_icon="💰", layout="centered")
 
@@ -99,7 +98,7 @@ with st.expander("📋 계산 상세"):
     })
 
 # ------------------------------
-# 6️⃣ 그래프 시각화 (천단위 표시)
+# 6️⃣ 그래프 시각화
 # ------------------------------
 st.divider()
 st.subheader("📈 총소득 대비 지급액 시각화")
@@ -111,11 +110,6 @@ adjusted_amounts = [apply_property_adjustment(a, property_value)[0] for a in amo
 fig, ax = plt.subplots(figsize=(8, 4))
 ax.plot(incomes, amounts, label="기본 산정액", linestyle="--", alpha=0.6)
 ax.plot(incomes, adjusted_amounts, label="재산 반영 후 지급액", linewidth=2)
-
-# 천단위 콤마 표시 포맷터
-formatter = FuncFormatter(lambda x, _: f"{int(x):,}")
-ax.xaxis.set_major_formatter(formatter)
-ax.yaxis.set_major_formatter(formatter)
 
 ax.set_title(f"{hh_type} 가구 – 총소득 vs 지급액")
 ax.set_xlabel("총소득 (원)")
