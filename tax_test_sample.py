@@ -55,8 +55,13 @@ uploaded_bank = st.file_uploader("📥 은행 계좌 내역 CSV 파일 업로드
 uploaded_tax = st.file_uploader("📥 세금계산서 엑셀 파일 업로드", type=["xlsx"])
 
 if uploaded_bank and uploaded_tax:
-    bank_df = pd.read_csv(uploaded_bank)
-    tax_df = pd.read_excel(uploaded_tax)
+    # Excel 파일 읽기 시 openpyxl 엔진 명시
+    try:
+        bank_df = pd.read_csv(uploaded_bank)
+        tax_df = pd.read_excel(uploaded_tax, engine="openpyxl")
+    except ImportError:
+        st.error("❌ 'openpyxl' 패키지가 설치되어 있지 않습니다. 터미널에서 `pip install openpyxl`을 실행하세요.")
+        st.stop()
 
     st.subheader("📄 업로드된 데이터 미리보기")
     col1, col2 = st.columns(2)
