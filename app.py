@@ -1,51 +1,117 @@
 import streamlit as st
-from openai import OpenAI
+import pandas as pd
+import numpy as np
+import io
 
-# --- 페이지 기본 설정 ---
-st.set_page_config(page_title="Chatbot", page_icon="💬", layout="centered")
+st.set_page_config(page_title="세금계산서 가공거래 분석기", layout="wide")
 
-st.title("💬 Streamlit Chatbot")
-st.write("OpenAI API 키를 입력하고 대화를 시작해보세요!")
+st.title("💰 세금계산서 가공거래 분석 프로그램 (Streamlit 버전)")
+st.markdown("---")
 
-# --- API 키 입력받기 ---
-api_key = st.text_input("🔑 OpenAI API 키를 입력하세요:", type="password")
-
-if not api_key:
-    st.warning("API 키를 입력해야 합니다.")
-    st.stop()
-
-# --- OpenAI 클라이언트 생성 ---
-try:
-    client = OpenAI(api_key=api_key)
-except Exception as e:
-    st.error(f"API 키가 유효하지 않습니다. ({e})")
-    st.stop()
-
-# --- 대화 세션 초기화 ---
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-
-# --- 이전 대화 표시 ---
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
-
-# --- 사용자 입력 ---
-if prompt := st.chat_input("메시지를 입력하세요..."):
-    st.chat_message("user").markdown(prompt)
-    st.session_state.messages.append({"role": "user", "content": prompt})
-
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=st.session_state.messages,
+# 샘플 데이터 다운로드 링크
+with open("hong_gildong_5accounts_transactions.csv", "rb") as f1, \
+     open("hong_gildong_tax_invoices.xlsx", "rb") as f2:
+    col1, col2 = st.columns(2)
+    with col1:
+        st.download_button(
+            label="📂 샘플 은행계좌 파일 다운로드",
+            data=f1,
+            file_name="sample_bank_accounts.csv",
+            mime="text/csv"
         )
-        reply = response.choices[0].message.content
-    except Exception as e:
-        reply = f"⚠️ 오류 발생: {e}"
+    with col2:
+        st.download_button(
+            label="📊 샘플 세금계산서 파일 다운로드",
+            data=f2,
+            file_name="sample_tax_invoices.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
-    # --- 챗봇 응답 표시 ---
-    with st.chat_message("assistant"):
-        st.markdown(reply)
+st.markdown("---")
 
-    st.session_state.messages.append({"role": "assistant", "content": reply})
+# 파일 업로드
+uploaded_bank = st.file_uploader("은행 계좌 내역 CSV 파일 업로드", type=["csv"])
+uploaded_tax = st.file_uploader("세금계산서 엑셀 파일 업로드", type=["xlsx"])
+
+if uploaded_bank and uploaded_tax:
+    bank_df = pd.read_csv(uploaded_bank)
+    tax_df = pd.read_excel(uploaded_tax)
+
+    st.subheader("📄 업로드된 데이터 미리보기")
+    st.write("은행 계좌 내역")
+    st.dataframe(bank_df.head())
+    st.write("세금계산서")
+    st.dataframe(tax_df.head())
+
+    # ---------------------------------------------
+    # 일치 여부 판단
+    # ---------------------------------------------
+    def match_transactions(bank_df, tax_df):
+        results = []
+        for _, row in bank_df.iterrows():
+            acc_no = str(row.get("본인계좌번호", ""))
+            amt = abs(row.get("거래금액", 0))
+            matched = tax_df[
+                (tax_df["계좌번호"].astype(str) == acc_no)
+                & (abs(tax_df["공급가액"] - amt) < 1)
+            ]
+            results.append("일치" if len(matched) > 0 else "불일치")
+        bank_df["일치여부"] = results
+        return bank_df
+
+    bank_df = match_transactions(bank_df, tax_df)
+
+    # ---------------------------------------------
+    # 의심 거래 탐지 (본인계좌 간 고액거래)
+    # ---------------------------------------------
+    suspicious = bank_df[
+        (bank_df["상대계좌주"].astype(str).str.contains("홍길동"))
+        & (bank_df["거래금액"].abs() >= 1_000_000)
+    ]
+    suspicious["주의"] = "⚠️ 주의"
+    suspicious_list = suspicious[["거래년월일", "본인계좌번호", "상대계좌번호", "거래금액", "주의"]]
+
+    # ---------------------------------------------
+    # 불일치 세금계산서 건수 및 금액
+    # ---------------------------------------------
+    matched_acc = bank_df.loc[bank_df["일치여부"] == "일치", "본인계좌번호"].unique()
+    unmatched_invoices = tax_df[~tax_df["계좌번호"].isin(matched_acc)]
+    unmatched_count = len(unmatched_invoices)
+    unmatched_amount = unmatched_invoices["합계금액"].sum()
+
+    # ---------------------------------------------
+    # 타인과의 고액 거래 Top5
+    # ---------------------------------------------
+    others = bank_df[~bank_df["상대계좌주"].astype(str).str.contains("홍길동")]
+    top5 = (
+        others.groupby("상대계좌주")["거래금액"]
+        .apply(lambda x: x.abs().sum())
+        .sort_values(ascending=False)
+        .head(5)
+        .reset_index()
+    )
+    top5.columns = ["거래처명", "총거래금액"]
+
+    # ---------------------------------------------
+    # 결과 표시
+    # ---------------------------------------------
+    st.markdown("---")
+    st.subheader("📊 분석 결과")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric(label="불일치 세금계산서 건수", value=f"{unmatched_count} 건")
+    with col2:
+        st.metric(label="불일치 세금계산서 총 금액", value=f"{unmatched_amount:,.0f} 원")
+
+    st.markdown("### ⚠️ 의심 거래 목록 (본인계좌 간 100만원 이상 거래)")
+    st.dataframe(suspicious_list, use_container_width=True)
+
+    st.markdown("### 💵 타인과의 고액 거래 TOP5")
+    st.dataframe(top5)
+
+    # 그래프
+    st.bar_chart(data=top5.set_index("거래처명"))
+
+else:
+    st.info("👆 은행계좌 CSV와 세금계산서 XLSX 파일을 모두 업로드하면 분석이 실행됩니다.")
