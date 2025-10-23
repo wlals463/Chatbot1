@@ -1,117 +1,116 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-import io
+from datetime import datetime
+from io import BytesIO
 
-st.set_page_config(page_title="세금계산서 가공거래 분석기", layout="wide")
+st.set_page_config(page_title="가공 거래 의심 탐지", layout="wide")
 
-st.title("💰 세금계산서 가공거래 분석 프로그램 (Streamlit 버전)")
-st.markdown("---")
+st.title("💰 가공 거래 의심 탐지 시스템")
+st.write("은행 거래내역과 세금계산서 내역을 비교하여 **가공 의심 거래**를 탐지합니다.")
 
-# 샘플 데이터 다운로드 링크
-with open("hong_gildong_5accounts_transactions.csv", "rb") as f1, \
-     open("hong_gildong_tax_invoices.xlsx", "rb") as f2:
-    col1, col2 = st.columns(2)
-    with col1:
-        st.download_button(
-            label="📂 샘플 은행계좌 파일 다운로드",
-            data=f1,
-            file_name="sample_bank_accounts.csv",
-            mime="text/csv"
-        )
-    with col2:
-        st.download_button(
-            label="📊 샘플 세금계산서 파일 다운로드",
-            data=f2,
-            file_name="sample_tax_invoices.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+# -------------------------------
+# 1️⃣ 파일 업로드
+# -------------------------------
+bank_file = st.file_uploader("📁 은행 거래내역 엑셀 파일을 업로드하세요", type=["xlsx"])
+tax_file = st.file_uploader("📁 세금계산서 엑셀 파일을 업로드하세요", type=["xlsx"])
 
-st.markdown("---")
+if bank_file and tax_file:
+    # -------------------------------
+    # 2️⃣ 데이터 불러오기
+# -------------------------------
+    bank_df = pd.read_excel(bank_file)
+    tax_df = pd.read_excel(tax_file)
 
-# 파일 업로드
-uploaded_bank = st.file_uploader("은행 계좌 내역 CSV 파일 업로드", type=["csv"])
-uploaded_tax = st.file_uploader("세금계산서 엑셀 파일 업로드", type=["xlsx"])
-
-if uploaded_bank and uploaded_tax:
-    bank_df = pd.read_csv(uploaded_bank)
-    tax_df = pd.read_excel(uploaded_tax)
-
-    st.subheader("📄 업로드된 데이터 미리보기")
-    st.write("은행 계좌 내역")
+    st.subheader("📄 은행 거래내역 미리보기")
     st.dataframe(bank_df.head())
-    st.write("세금계산서")
+
+    st.subheader("📄 세금계산서 내역 미리보기")
     st.dataframe(tax_df.head())
 
-    # ---------------------------------------------
-    # 일치 여부 판단
-    # ---------------------------------------------
-    def match_transactions(bank_df, tax_df):
-        results = []
-        for _, row in bank_df.iterrows():
-            acc_no = str(row.get("본인계좌번호", ""))
-            amt = abs(row.get("거래금액", 0))
-            matched = tax_df[
-                (tax_df["계좌번호"].astype(str) == acc_no)
-                & (abs(tax_df["공급가액"] - amt) < 1)
-            ]
-            results.append("일치" if len(matched) > 0 else "불일치")
-        bank_df["일치여부"] = results
-        return bank_df
+    # 날짜 컬럼 처리
+    bank_df["거래연월일"] = pd.to_datetime(bank_df["거래연월일"], errors="coerce")
+    tax_df["세금계산서 발급일"] = pd.to_datetime(tax_df["세금계산서 발급일"], errors="coerce")
 
-    bank_df = match_transactions(bank_df, tax_df)
+    # -------------------------------
+    # 3️⃣ 비교 로직
+    # -------------------------------
+    results = []
 
-    # ---------------------------------------------
-    # 의심 거래 탐지 (본인계좌 간 고액거래)
-    # ---------------------------------------------
-    suspicious = bank_df[
-        (bank_df["상대계좌주"].astype(str).str.contains("홍길동"))
-        & (bank_df["거래금액"].abs() >= 1_000_000)
-    ]
-    suspicious["주의"] = "⚠️ 주의"
-    suspicious_list = suspicious[["거래년월일", "본인계좌번호", "상대계좌번호", "거래금액", "주의"]]
+    for _, bank_row in bank_df.iterrows():
+        bank_date = bank_row["거래연월일"]
+        bank_name = str(bank_row["상대 계좌주"]).strip()
+        bank_amt = float(bank_row["입출금액"])
+        match_found = False
 
-    # ---------------------------------------------
-    # 불일치 세금계산서 건수 및 금액
-    # ---------------------------------------------
-    matched_acc = bank_df.loc[bank_df["일치여부"] == "일치", "본인계좌번호"].unique()
-    unmatched_invoices = tax_df[~tax_df["계좌번호"].isin(matched_acc)]
-    unmatched_count = len(unmatched_invoices)
-    unmatched_amount = unmatched_invoices["합계금액"].sum()
+        for _, tax_row in tax_df.iterrows():
+            tax_date = tax_row["세금계산서 발급일"]
+            tax_item = str(tax_row["품목명"]).strip()
+            tax_amt = float(tax_row["합계"])
 
-    # ---------------------------------------------
-    # 타인과의 고액 거래 Top5
-    # ---------------------------------------------
-    others = bank_df[~bank_df["상대계좌주"].astype(str).str.contains("홍길동")]
-    top5 = (
-        others.groupby("상대계좌주")["거래금액"]
-        .apply(lambda x: x.abs().sum())
-        .sort_values(ascending=False)
-        .head(5)
-        .reset_index()
-    )
-    top5.columns = ["거래처명", "총거래금액"]
+            # 이름 유사 + 날짜 ±3일 + 금액 ±1000원
+            if (bank_name in tax_item or tax_item in bank_name) and abs((bank_date - tax_date).days) <= 3:
+                if abs(bank_amt - tax_amt) <= 1000:
+                    match_found = True
+                    break
 
-    # ---------------------------------------------
-    # 결과 표시
-    # ---------------------------------------------
-    st.markdown("---")
-    st.subheader("📊 분석 결과")
+        if not match_found:
+            results.append({
+                "거래연월일": bank_date,
+                "상대 계좌주": bank_name,
+                "입출금액": bank_amt,
+                "의심유형": "가공 또는 누락 의심"
+            })
 
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric(label="불일치 세금계산서 건수", value=f"{unmatched_count} 건")
-    with col2:
-        st.metric(label="불일치 세금계산서 총 금액", value=f"{unmatched_amount:,.0f} 원")
+    result_df = pd.DataFrame(results)
 
-    st.markdown("### ⚠️ 의심 거래 목록 (본인계좌 간 100만원 이상 거래)")
-    st.dataframe(suspicious_list, use_container_width=True)
+    # -------------------------------
+    # 4️⃣ 결과 요약 및 표시
+    # -------------------------------
+    if not result_df.empty:
+        st.success("✅ 분석 완료! 아래는 가공 의심 거래 내역입니다.")
+        st.dataframe(result_df)
 
-    st.markdown("### 💵 타인과의 고액 거래 TOP5")
-    st.dataframe(top5)
+        # TOP 5 (금액별)
+        top5 = (
+            result_df.groupby("상대 계좌주")["입출금액"]
+            .sum()
+            .abs()
+            .sort_values(ascending=False)
+            .head(5)
+            .reset_index()
+        )
+        top5.columns = ["상대 계좌주", "의심금액 합계"]
 
-    # 그래프
-    st.bar_chart(data=top5.set_index("거래처명"))
+        st.subheader("⚠️ 가공 거래 의심자 Top 5 (금액 기준)")
+        st.table(top5)
+
+        # -------------------------------
+        # 5️⃣ 그래프 시각화
+        # -------------------------------
+        st.bar_chart(
+            data=top5.set_index("상대 계좌주"),
+            use_container_width=True,
+        )
+
+        # -------------------------------
+        # 6️⃣ 결과 엑셀 파일 다운로드
+        # -------------------------------
+        st.subheader("📤 결과 다운로드")
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine="openpyxl") as writer:
+            result_df.to_excel(writer, index=False, sheet_name="의심거래")
+            top5.to_excel(writer, index=False, sheet_name="Top5")
+        output.seek(0)
+
+        st.download_button(
+            label="📂 결과 엑셀 파일 다운로드",
+            data=output,
+            file_name=f"가공의심거래결과_{datetime.now().strftime('%Y%m%d')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
+    else:
+        st.info("모든 거래가 정상으로 판별되었습니다 🎉")
 
 else:
-    st.info("👆 은행계좌 CSV와 세금계산서 XLSX 파일을 모두 업로드하면 분석이 실행됩니다.")
+    st.warning("두 파일(은행 거래 + 세금계산서)을 모두 업로드하세요.")
