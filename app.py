@@ -1,44 +1,54 @@
 import streamlit as st
 from openai import OpenAI
 
-# 페이지 기본 설정
-st.set_page_config(page_title="ChatGPT Streamlit Bot", page_icon="💬")
+# --- 페이지 설정 ---
+st.set_page_config(page_title="Streamlit Chatbot", page_icon="🤖", layout="centered")
 
-# 제목
-st.title("💬 Streamlit Chatbot powered by OpenAI")
+st.title("💬 Streamlit Chatbot")
+st.write("OpenAI API 키를 입력하고 챗봇과 대화해보세요!")
 
-# API Key 입력 또는 설정
-openai_api_key = st.text_input("🔑 Enter your OpenAI API Key", type="password")
+# --- API 키 입력 ---
+api_key = st.text_input("🔑 OpenAI API 키를 입력하세요:", type="password")
 
-if not openai_api_key:
-    st.warning("Please enter your API key to start chatting.")
+if not api_key:
+    st.warning("API 키를 입력해야 합니다.")
     st.stop()
 
-# 클라이언트 생성
-client = OpenAI(api_key=openai_api_key)
+# --- 클라이언트 생성 ---
+try:
+    client = OpenAI(api_key=api_key)
+except Exception as e:
+    st.error(f"API 키가 유효하지 않습니다: {e}")
+    st.stop()
 
-# 세션 상태 초기화
+# --- 대화 저장소 초기화 ---
 if "messages" not in st.session_state:
-    st.session_state.messages = [{"role": "system", "content": "You are a helpful assistant."}]
+    st.session_state.messages = []
 
-# 대화 출력
+# --- 이전 대화 출력 ---
 for msg in st.session_state.messages:
-    if msg["role"] == "user":
-        st.chat_message("user").markdown(msg["content"])
-    else:
-        st.chat_message("assistant").markdown(msg["content"])
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
 
-# 사용자 입력
-if prompt := st.chat_input("Type your message here..."):
-    st.session_state.messages.append({"role": "user", "content": prompt})
+# --- 사용자 입력 ---
+if prompt := st.chat_input("무엇이든 물어보세요!"):
+    # 사용자 메시지 표시
     st.chat_message("user").markdown(prompt)
+    st.session_state.messages.append({"role": "user", "content": prompt})
 
-    # OpenAI API 호출
-    with st.chat_message("assistant"):
+    # OpenAI 응답 생성
+    try:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=st.session_state.messages
+            messages=st.session_state.messages,
         )
         reply = response.choices[0].message.content
+    except Exception as e:
+        reply = f"오류 발생: {e}"
+
+    # 챗봇 응답 표시
+    with st.chat_message("assistant"):
         st.markdown(reply)
+
+    # 대화 저장
     st.session_state.messages.append({"role": "assistant", "content": reply})
